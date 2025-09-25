@@ -14,9 +14,12 @@ from google.genai import types
 # from tools.processing_tool import process_document
 from Backend.tools.processing_tool import process_document
 # from Backend.tools.email_extraction_tool import check_email_inbox
+from Backend.agents.team_agent import team_risk_agent, run_team_agent
 from fastapi.middleware.cors import CORSMiddleware  
+from fastapi import Request, HTTPException, Depends,status
 import json
 import logging
+
 
 # ===== Logging Setup =====
 logging.basicConfig(level=logging.INFO)
@@ -24,8 +27,6 @@ logger = logging.getLogger("pipeline_logger")
 # logger=logging.getLogger("google.adk").setLevel(logging.DEBUG)
 
 # router = APIRouter()
-
-
 
 
 # ===== GCS Config =====
@@ -38,49 +39,47 @@ class DocRequest(BaseModel):
     file_paths: list[str]
 
 # ===== System Instruction =====
-# ===== System Instruction =====
 instruction = """
 You are a Data Ingestion and Structuring Agent for startup evaluation.
  
-Tasks:
-1. You MUST call the `process_document` tool with the input {"bucket_name": "...", "file_paths": ["..."]}.
-2. Then analyze text and Output must be *only* valid JSON without Markdown or extra text with this schema:
+ Tasks:
+ 1. You MUST call the `process_document` tool with the input {"bucket_name": "...", "file_paths": ["..."]}.
+ 2. Then analyze text and Output must be *only* valid JSON without Markdown or extra text with this schema:
+  
+  {
+    "startup_name": "string or null",
+    "traction": {
+        "current_mrr": number or null,
+        "mrr_growth_trend": "string or null",
+        "active_customers": number or null,
+        "other_metrics": ["string", "string"]
+    },
+    "financials": {
+        "ask_amount": number or null,
+        "equity_offered": number or null,
+        "implied_valuation": number or null,
+        "revenue": number or null,
+        "burn_rate": number or null
+    },
+    "team": {
+        "ceo": "string or null",
+        "cto": "string or null",
+        "other_key_members": ["string", "string"]
+    },
+    "market": {
+        "market_size_claim": "string or null",
+        "target_market": "string or null"
+    },
+    "product_description": "string or null",
+    "document_type": "pitch_deck | transcript | financial_statement | other"
+  }
  
-{
-  "startup_name": "string or null",
-  "traction": {
-    "current_mrr": number or null,
-    "mrr_growth_trend": "string or null",
-    "active_customers": number or null,
-    "other_metrics": ["string", "string"]
-  },
-  "financials": {
-    "ask_amount": number or null,
-    "equity_offered": number or null,
-    "implied_valuation": number or null,
-    "revenue": number or null,
-    "burn_rate": number or null
-  },
-  "team": {
-    "ceo": "string or null",
-    "cto": "string or null",
-    "other_key_members": ["string", "string"]
-  },
-  "market": {
-    "market_size_claim": "string or null",
-    "target_market": "string or null"
-  },
-  "product_description": "string or null",
-  "document_type": "pitch_deck | transcript | financial_statement | other"
-}
- 
-Rules:
-- No hallucinations.
-- Numbers extracted exactly.
-- Missing = null.
-- Final output must be valid JSON only.
+ Rules:
+ - No hallucinations.
+ - Numbers extracted exactly.
+ - Missing = null.
+ - Final output must be valid JSON only.
 """
-
 
 # ===== Define the Agent =====
 doc_ingest_agent  = Agent(
@@ -89,48 +88,6 @@ doc_ingest_agent  = Agent(
     instruction=instruction,
     tools=[process_document],
 )
-
-
-
-# recommendation_instruction = """
-# You are the Recommendation & Scoring Agent.
-
-# Role:
-# - The final judge. You take the structured JSON data from the Ingestion Agent.
-# - Apply scoring logic and generate a deal memo for investors.
-
-# Steps:
-# 1. Parse the structured JSON input.
-# 2. Score the startup on:
-#    - Traction (/10)
-#    - Team (/10)
-#    - Market (/10)
-#    - Product (/10)
-# 3. Apply weighted scoring (weights will be provided in input, otherwise default = Team: 0.3, Market: 0.2, Traction: 0.35, Product: 0.15).
-# 4. Output a final recommendation:
-#    - Verdict: Strong Pass | Pass | Weak Pass | Fail
-#    - Rationale: clear strengths and weaknesses
-#    - Recommendation: next steps
-
-# Output Format Example:
-
-# It tasks the Recommendation Agent with scoring.
-
-# Recommendation Agent scores:
-# Traction: 8/10 (strong growth, high valuation), 
-# Team: 9/10, 
-# Market: 6/10 (TAM inflated), 
-# Product: 7/10.
-
-# Applying the custom weights: (8*0.35) + (9*0.3) + (6*0.2) + (7*0.15) = 7.85/10
-
-# Final Generative Output (The AI Analyst's Memo):
-# **Startup X: Deal Memo**
-# **Verdict: Weak Pass (Score: 7.85/10)**
-# **Strengths:** Exceptional founding team with relevant pedigree and exit. Demonstrated strong initial MRR growth (50% MoM).
-# **Risks & Weaknesses:** Market size is significantly inflated; realistic SAM is $5B. Pre-money valuation ask is 2x sector average for this stage. Minor data inconsistency between deck and call on MRR.
-# **Recommendation:** Schedule a follow-up call to clarify market sizing assumptions and negotiate valuation down to $6-7M pre-money. Due diligence should focus on customer churn metrics.
-# """
 
 recommendation_instruction = """
 You are the Recommendation & Scoring Agent.
@@ -169,7 +126,6 @@ Output Format Example:
 }
 """
 
-
 recommendation_agent = Agent(
     name="recommendation_agent",
     model="gemini-2.0-flash",
@@ -177,24 +133,33 @@ recommendation_agent = Agent(
 )
 
 # ===== Sequential Pipeline =====
+# pipeline = SequentialAgent(
+#     name="analysis_pipeline",
+#     description=(
+#         "This pipeline runs in two steps:\n"
+#         "1. The first agent (doc_ingest_agent) ONLY extracts and structures startup data into valid JSON.\n"
+#         "   It must NOT provide analysis, scoring, or recommendation.\n"
+#         "2. The second agent (recommendation_agent) ALWAYS takes that JSON as input and generates "
+#         "   scoring, a final recommendation, and a short memo.\n"
+#         "The pipeline is complete only after the second agent produces its output."
+#     ),
+#     sub_agents=[doc_ingest_agent, recommendation_agent],
+# )
+
 pipeline = SequentialAgent(
     name="analysis_pipeline",
     description=(
-        "This pipeline runs in two steps:\n"
-        "1. The first agent (doc_ingest_agent) ONLY extracts and structures startup data into valid JSON.\n"
-        "   It must NOT provide analysis, scoring, or recommendation.\n"
-        "2. The second agent (recommendation_agent) ALWAYS takes that JSON as input and generates "
-        "   scoring, a final recommendation, and a short memo.\n"
-        "The pipeline is complete only after the second agent produces its output."
+        "This pipeline runs in three steps:\n"
+        "1. doc_ingest_agent: Extracts and structures startup data\n"
+        "2. team_risk_agent: Evaluates team composition and execution risk\n"
+        "3. recommendation_agent: Generates final scoring and recommendations"
     ),
-    sub_agents=[doc_ingest_agent, recommendation_agent],
+    sub_agents=[doc_ingest_agent, team_risk_agent, recommendation_agent],
 )
 
 # ===== Runner =====
 session_service = InMemorySessionService()
 runner = adk.Runner(agent=pipeline, app_name="startup_app", session_service=session_service)
-
-
 
 # ===== Pipeline Runner Function =====
 async def run_pipeline(file_json: dict):
@@ -214,7 +179,7 @@ async def run_pipeline(file_json: dict):
         session_id="session1",
         new_message=content
     ):
-     
+       
         if not event.content or not event.content.parts:
             continue
         # print(event.content.parts)
@@ -247,11 +212,12 @@ app = FastAPI(title="Doc Ingestion + Recommendation API")
 # ===== Enable CORS =====
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # 👈 for testing; replace with your frontend URL in prod
+    allow_origins=["https://3000-roop9390-hackathon-qezk4qr0bch.ws-us121.gitpod.io"],   # 👈 for testing; replace with your frontend URL in prod
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 @app.post("/full-analysis")
 async def full_analysis(
@@ -290,3 +256,27 @@ async def full_analysis(
     result = await run_pipeline(payload)
 
     return JSONResponse(content={"response": result})
+
+@app.post("/team-analysis")
+async def team_analysis(
+    company_name: str = Form(...),
+    team_members: str = Form(...)  # JSON string of team members
+):
+    """
+    Analyze only the team composition and execution risk
+    """
+    try:
+        team_data = json.loads(team_members)
+        input_payload = {
+            "company_name": company_name,
+            "team_members": team_data
+        }
+        
+        result = await run_team_agent(input_payload)
+        return JSONResponse(content={"response": result})
+        
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid team_members JSON")
+    except Exception as e:
+        logger.error(f"Team analysis error: {e}")
+        raise HTTPException(status_code=500, detail="Team analysis failed")
