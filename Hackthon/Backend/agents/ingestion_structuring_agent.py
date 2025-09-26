@@ -266,17 +266,31 @@ async def team_analysis(
     Analyze only the team composition and execution risk
     """
     try:
+        # Parse the team_members JSON string to validate it
         team_data = json.loads(team_members)
+        
+        # Ensure it's a list
+        if not isinstance(team_data, list):
+            team_data = [team_data]
+        
+        # Convert back to JSON string for the tool
+        team_members_json = json.dumps(team_data)
+        
         input_payload = {
             "company_name": company_name,
-            "team_members": team_data
+            "team_members_json": team_members_json  # Pass as string
         }
         
+        logger.info(f"Team analysis input: {input_payload}")
         result = await run_team_agent(input_payload)
         return JSONResponse(content={"response": result})
         
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Invalid team_members JSON")
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON decode error: {e}")
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Invalid team_members JSON: {str(e)}. Expected format: [{{'name': '...', 'role': '...'}}]"
+        )
     except Exception as e:
         logger.error(f"Team analysis error: {e}")
-        raise HTTPException(status_code=500, detail="Team analysis failed")
+        raise HTTPException(status_code=500, detail=f"Team analysis failed: {str(e)}")
