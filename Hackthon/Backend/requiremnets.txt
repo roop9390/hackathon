@@ -13,8 +13,10 @@ uvicorn
 
 pandas
 numpy
+python-dotenv
+
+aiohttp
 requests==2.31.0
 beautifulsoup4==4.12.2
 textblob==0.17.1
-python-dotenv==1.0.0
 newsapi-python==0.2.7

@@ -26,8 +26,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("pipeline_logger")
 # logger=logging.getLogger("google.adk").setLevel(logging.DEBUG)
 
-# router = APIRouter()
-
 
 # ===== GCS Config =====
 BUCKET_NAME = "ai-analyst-uploads-files"
@@ -171,7 +169,7 @@ async def run_pipeline(file_json: dict):
     )
 
     content = types.Content(role="user", parts=[types.Part(text=json.dumps(file_json))])
-    print(content)
+    # print(content)
     final_output = None  # 👈 hold last agent output
 
     async for event in runner.run_async(
@@ -182,7 +180,6 @@ async def run_pipeline(file_json: dict):
        
         if not event.content or not event.content.parts:
             continue
-        # print(event.content.parts)
         for part in event.content.parts:         
             if part.text:
                 raw_text = part.text.strip()
