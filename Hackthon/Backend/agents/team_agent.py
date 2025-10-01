@@ -9,7 +9,7 @@ import logging
 import re
 import os
 from dotenv import load_dotenv
-from Backend.tools.team_analysis_tool import evaluate_team_tool
+from tools.team_analysis_tool import evaluate_team_tool
 
 load_dotenv()
 

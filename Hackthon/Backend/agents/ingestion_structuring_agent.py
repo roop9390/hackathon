@@ -12,9 +12,9 @@ import google.adk as adk
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 # from tools.processing_tool import process_document
-from Backend.tools.processing_tool import process_document
+from tools.processing_tool import process_document
 # from Backend.tools.email_extraction_tool import check_email_inbox
-from Backend.agents.team_agent import team_risk_agent, run_team_agent
+from agents.team_agent import team_risk_agent, run_team_agent
 from fastapi.middleware.cors import CORSMiddleware  
 from fastapi import Request, HTTPException, Depends,status
 import json
