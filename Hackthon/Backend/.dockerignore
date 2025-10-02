@@ -1,0 +1,11 @@
+# Ignore secrets
+.env
+
+# Ignore Python cache
+__pycache__/
+*.pyc
+
+# Ignore virtual environment
+myenv/
+
+ai-analyst-poc-4c4651a0ea55.json
