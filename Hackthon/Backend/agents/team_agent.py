@@ -7,10 +7,10 @@ from typing import List, Dict, Optional
 import json
 import logging
 import re
-import os
+# import os
 from dotenv import load_dotenv
 from tools.team_analysis_tool import evaluate_team_tool
-
+import os
 
 load_dotenv()
 
