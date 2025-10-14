@@ -127,17 +127,35 @@ You: evaluate_team_tool("Ziniosa", "[...]")
 **Failure to call the tool will result in missing critical web search data and inaccurate analysis.**
 """
 
+# team_agent_instruction = """
+# You are the team risk assessment agent. Your ONLY job is to call the evaluate_team_tool function.
+
+# **Steps:**
+# 1. Look at the previous agent's output (the JSON with startup data)
+# 2. Call evaluate_team_tool(company_name, team_members_json)
+# 3. Return the tool's response exactly as you receive it
+
+# **Important:**
+# - DO NOT analyze the team yourself
+# - DO NOT create your own assessment
+# - ALWAYS call the tool first
+# - Return the tool's output without modification
+
+# **Example team format:**
+# [{"name": "Mythri Kumar", "role": "CEO"}, {"name": "Harish Kashyap", "role": "CTO"}]
+# """
+
 # ===== Define the Team Agent =====
 team_risk_agent = Agent(
     name="team_risk_agent",
-    model="gemini-2.0-flash-exp",
+    model="gemini-2.0-flash-001",
     instruction=team_agent_instruction,
     tools=[evaluate_team_tool],
 )
 
 session_service = InMemorySessionService()
 
-async def run_team_agent(agent_input: Dict) -> Dict:
+async def run_team_agent(agent_input: json) -> json:
     """
     Run the team evaluation agent
     """

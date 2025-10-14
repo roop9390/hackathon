@@ -14,11 +14,14 @@ from google.genai import types
 # from tools.processing_tool import process_document
 from tools.processing_tool import process_document
 # from Backend.tools.email_extraction_tool import check_email_inbox
-from agents.team_agent import team_risk_agent, run_team_agent
+from agents.team_agent import team_risk_agent,run_team_agent
+from agents.market_agent import market_analyst_agent
 from fastapi.middleware.cors import CORSMiddleware  
 from fastapi import Request, HTTPException, Depends,status
 import json
 import logging
+import time
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 
 # ===== Logging Setup =====
@@ -28,13 +31,14 @@ logger = logging.getLogger("pipeline_logger")
 
 
 # ===== GCS Config =====
-BUCKET_NAME = "ai-analyst-uploads-files"
+BUCKET_NAME = "ai-analyst-uploads-file"
 storage_client = storage.Client()
 
 # ===== Request Schema =====
 class DocRequest(BaseModel):
     bucket_name: str
     file_paths: list[str]
+
 
 # ===== System Instruction =====
 instruction = """
@@ -82,53 +86,53 @@ You are a Data Ingestion and Structuring Agent for startup evaluation.
 # ===== Define the Agent =====
 doc_ingest_agent  = Agent(
     name="doc_ingest_agent",
-    model="gemini-2.0-flash",
+    model="gemini-2.0-flash-001",
     instruction=instruction,
     tools=[process_document],
 )
 
-recommendation_instruction = """
-You are the Recommendation & Scoring Agent.
+# recommendation_instruction = """
+# You are the Recommendation & Scoring Agent.
 
-Role:
-- The final judge. You take the structured JSON data from the Ingestion Agent.
-- Apply scoring logic and generate a deal memo for investors.
+# Role:
+# - The final judge. You take the structured JSON data from the Ingestion Agent.
+# - Apply scoring logic and generate a deal memo for investors.
 
-Steps:
-1. Parse the structured JSON input.
-2. Score the startup on:
-   - Traction (/10)
-   - Team (/10)
-   - Market (/10)
-   - Product (/10)
-3. Apply weighted scoring (weights will be provided in input, otherwise default = Team: 0.3, Market: 0.2, Traction: 0.35, Product: 0.15).
-4. Output a final recommendation:
-   - Verdict: Strong Pass | Pass | Weak Pass | Fail
-   - Rationale: clear strengths and weaknesses
-   - Recommendation: next steps
+# Steps:
+# 1. Parse the structured JSON input.
+# 2. Score the startup on:
+#    - Traction (/10)
+#    - Team (/10)
+#    - Market (/10)
+#    - Product (/10)
+# 3. Apply weighted scoring (weights will be provided in input, otherwise default = Team: 0.3, Market: 0.2, Traction: 0.35, Product: 0.15).
+# 4. Output a final recommendation:
+#    - Verdict: Strong Pass | Pass | Weak Pass | Fail
+#    - Rationale: clear strengths and weaknesses
+#    - Recommendation: next steps
 
-Output Format Example:
+# Output Format Example:
 
-{
-  "response": {
-    "Traction": "8/10 (strong growth, high valuation)",
-    "Team": "9/10 (experienced founders with exits)",
-    "Market": "6/10 (TAM inflated)",
-    "Product": "7/10 (clear value proposition)",
-    "Weighted_Score": "7.85/10",
-    "Verdict": "Weak Pass",
-    "Strengths": "Exceptional founding team with relevant pedigree and exit. Strong MRR growth.",
-    "Risks": "Market size inflated; valuation ask is above average.",
-    "Recommendation": "Schedule follow-up call to clarify assumptions and negotiate valuation."
-  }
-}
-"""
+# {
+#   "response": {
+#     "Traction": "8/10 (strong growth, high valuation)",
+#     "Team": "9/10 (experienced founders with exits)",
+#     "Market": "6/10 (TAM inflated)",
+#     "Product": "7/10 (clear value proposition)",
+#     "Weighted_Score": "7.85/10",
+#     "Verdict": "Weak Pass",
+#     "Strengths": "Exceptional founding team with relevant pedigree and exit. Strong MRR growth.",
+#     "Risks": "Market size inflated; valuation ask is above average.",
+#     "Recommendation": "Schedule follow-up call to clarify assumptions and negotiate valuation."
+#   }
+# }
+# """
 
-recommendation_agent = Agent(
-    name="recommendation_agent",
-    model="gemini-2.0-flash",
-    instruction=recommendation_instruction
-)
+# recommendation_agent = Agent(
+#     name="recommendation_agent",
+#     model="gemini-2.0-flash",
+#     instruction=recommendation_instruction
+# )
 
 # ===== Sequential Pipeline =====
 # pipeline = SequentialAgent(
@@ -149,62 +153,107 @@ pipeline = SequentialAgent(
     description=(
         "This pipeline runs in three steps:\n"
         "1. doc_ingest_agent: Extracts and structures startup data\n"
-        "2. team_risk_agent: Evaluates team composition and execution risk\n"
-        "3. recommendation_agent: Generates final scoring and recommendations"
+        # "2. team_risk_agent: Evaluates team composition and execution risk using the extracted team data from doc_ingest_agent\n"
+        # "3. recommendation_agent: Generates final scoring and recommendations"
+        "2. market_analyst_agent: Analyzes market opportunity using extracted market data"
     ),
-    sub_agents=[doc_ingest_agent, team_risk_agent, recommendation_agent],
+    sub_agents=[doc_ingest_agent,market_analyst_agent],
 )
 
-# ===== Runner =====
-session_service = InMemorySessionService()
-runner = adk.Runner(agent=pipeline, app_name="startup_app", session_service=session_service)
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+async def run_pipeline_with_retry(file_json: dict):
+    return await run_pipeline(file_json)
 
 # ===== Pipeline Runner Function =====
 async def run_pipeline(file_json: dict):
+    session_service = InMemorySessionService()
 
     await session_service.create_session(
         app_name="startup_app",
-        user_id="user123",
+        user_id="user123", 
         session_id="session1"
     )
 
+    runner = adk.Runner(
+        agent=pipeline, 
+        app_name="startup_app", 
+        session_service=session_service
+    )
+
     content = types.Content(role="user", parts=[types.Part(text=json.dumps(file_json))])
-    # print(content)
-    final_output = None  # 👈 hold last agent output
+    
+    agent_outputs = {
+        "doc_ingest_agent": None,
+        "market_risk_agent": None
+    }
 
-    async for event in runner.run_async(
-        user_id="user123",
-        session_id="session1",
-        new_message=content
-    ):
-       
-        if not event.content or not event.content.parts:
-            continue
-        for part in event.content.parts:         
-            if part.text:
-                raw_text = part.text.strip()
-                cleaned_text = re.sub(r"^```json\s*|\s*```$", "", raw_text, flags=re.MULTILINE)
-                logger.info(f"[{getattr(event, 'source_agent', 'unknown')}] TEXT: {cleaned_text}")
-                final_output = cleaned_text
+    current_agent = None
+    doc_ingest_output = None  # Store the first agent's output
 
-            elif part.function_call:
-                logger.info(
-                    f"[{getattr(event, 'source_agent', 'unknown')}] TOOL CALL: "
-                    f"{part.function_call.name}({part.function_call.args})"
-                )
-
-    # after loop ends, final_output will be from the *last agent*
-    if not final_output:
-        return {"error": "Pipeline returned no output"}
+    logger.info("🚀 Starting sequential agent pipeline...")
 
     try:
-        # Try parsing JSON (for rec agent you expect text, so this will fail safely)
-        return json.loads(final_output)
-    except json.JSONDecodeError:
-        return {"report": final_output}
+        async for event in runner.run_async(
+            user_id="user123",
+            session_id="session1", 
+            new_message=content
+        ):
+            if not event.content or not event.content.parts:
+                continue
+                
+            # Track current agent
+            agent_name = getattr(event, 'source_agent', None)
+            if agent_name:
+                current_agent = agent_name
+                logger.info(f"🔄 Currently executing: {agent_name}")
+                
+            for part in event.content.parts:         
+                if part.text:
+                    raw_text = part.text.strip()
+                    cleaned_text = re.sub(r"^```json\s*|\s*```$", "", raw_text, flags=re.MULTILINE)
+                    
+                    logger.info(f"[{current_agent}] TEXT: {cleaned_text[:200]}...")
+                    
+                    # Store doc_ingest_agent output
+                    if current_agent == "doc_ingest_agent":
+                        try:
+                            parsed_output = json.loads(cleaned_text)
+                            agent_outputs["doc_ingest_agent"] = parsed_output
+                            logger.info("✅ Stored doc_ingest_agent output")
+                        except json.JSONDecodeError:
+                            agent_outputs["doc_ingest_agent"] = cleaned_text
+                    
+                    elif current_agent == "market_analyst_agent":
+                        try:
+                            # The market analyst output might be the function call response
+                            if cleaned_text.startswith('{') and cleaned_text.endswith('}'):
+                                parsed_output = json.loads(cleaned_text)
+                                agent_outputs["market_analyst_agent"] = parsed_output
+                            else:
+                                agent_outputs["market_analyst_agent"] = cleaned_text
+                            logger.info("✅ Stored market_analyst_agent output")
+                        except json.JSONDecodeError:
+                            agent_outputs["market_analyst_agent"] = cleaned_text
+                
+                # Also track function calls
+                if part.function_call:
+                    logger.info(f"🛠️ [{current_agent}] TOOL CALL: {part.function_call.name}")
+                    
+    except Exception as e:
+        logger.error(f"❌ Error in pipeline execution: {e}")
+        import traceback
+        logger.error(f"❌ Traceback: {traceback.format_exc()}")
+    
+    # Return comprehensive results
+    return {
+        "document_analysis": agent_outputs["doc_ingest_agent"] or {"error": "Document analysis not available"},
+        "market_analysis": agent_outputs["market_analyst_agent"] or {"error": "Market analysis not available"},
+        "pipeline_status": "completed"
+    }
+
 
 # ===== FastAPI App =====
-app = FastAPI(title="Doc Ingestion + Recommendation API")
+app = FastAPI(title="Doc Ingestion +  Team Analysis API")
 
 # ===== Enable CORS =====
 app.add_middleware(
@@ -273,13 +322,13 @@ async def team_analysis(
         # Convert back to JSON string for the tool
         team_members_json = json.dumps(team_data)
         
-        input_payload = {
+        
+        
+        # logger.info(f"Team analysis input: {input_payload}")
+        result = await run_team_agent({
             "company_name": company_name,
             "team_members_json": team_members_json  # Pass as string
-        }
-        
-        logger.info(f"Team analysis input: {input_payload}")
-        result = await run_team_agent(input_payload)
+        })
         return JSONResponse(content={"response": result})
         
     except json.JSONDecodeError as e:

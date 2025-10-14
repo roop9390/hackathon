@@ -228,7 +228,235 @@ logger = logging.getLogger("team_risk_tool")
 # ===== Web Search Configuration =====
 NEWSAPI_KEY = os.getenv('NEWSAPI_KEY')
 GOOGLE_SEARCH_KEY = os.getenv('GOOGLE_SEARCH_KEY')
-GOOGLE_CX = os.getenv('GOOGLE_CX')
+GOOGLE_SEARCH_Engine_Id = os.getenv('GOOGLE_SEARCH_Engine_Id')
+RAPIDAPI_KEY = os.getenv('RAPIDAPI_KEY')
+
+class LinkedInClient:
+    """Corrected client for LinkedIn API operations via RapidAPI"""
+    
+    def __init__(self):
+        self.rapidapi_key = RAPIDAPI_KEY
+        self._session = None
+        self.base_url = "https://ultimate-linkedin.p.rapidapi.com"
+        self.endpoints_checked = False
+        self.working_endpoints = {}
+    
+    async def get_session(self):
+        if self._session is None:
+            self._session = aiohttp.ClientSession()
+        return self._session
+    
+    async def validate_endpoints(self):
+        """Check which LinkedIn API endpoints actually work"""
+        if self.endpoints_checked:
+            return self.working_endpoints
+            
+        if not self.rapidapi_key:
+            self.endpoints_checked = True
+            return {}
+        
+        headers = {
+            'X-RapidAPI-Key': self.rapidapi_key,
+            'X-RapidAPI-Host': 'ultimate-linkedin.p.rapidapi.com'
+        }
+        
+        endpoints_to_test = {
+            'search': f"{self.base_url}/search",
+            'search_profiles': f"{self.base_url}/search-profiles", 
+            'profile_search': f"{self.base_url}/profile-search",
+            'profile': f"{self.base_url}/profile"
+        }
+        
+        session = await self.get_session()
+        working = {}
+        
+        for name, url in endpoints_to_test.items():
+            try:
+                # Test with a simple request
+                async with session.get(url, headers=headers, timeout=10) as response:
+                    if response.status in [200, 400, 422]:  # 400/422 might mean endpoint exists but needs params
+                        working[name] = url
+                        logger.info(f"✅ LinkedIn endpoint {name} is available")
+                    else:
+                        logger.warning(f"⚠️ LinkedIn endpoint {name} returned {response.status}")
+            except Exception as e:
+                logger.warning(f"⚠️ LinkedIn endpoint {name} failed: {e}")
+        
+        self.working_endpoints = working
+        self.endpoints_checked = True
+        
+        if not working:
+            logger.error("❌ No working LinkedIn endpoints found")
+        
+        return working
+    
+    async def get_person_linkedin_data(self, person_name: str, company_name: str) -> Dict:
+        """
+        Get comprehensive LinkedIn data for a person
+        """
+        if not self.rapidapi_key:
+            return self._no_linkedin_response("RAPIDAPI_KEY not configured")
+        
+        # Validate endpoints on first use
+        if not self.endpoints_checked:
+            await self.validate_endpoints()
+        
+        # If no working endpoints, skip LinkedIn
+        if not self.working_endpoints:
+            return self._no_linkedin_response("No working LinkedIn API endpoints available")
+        
+        logger.info(f"🔍 Searching LinkedIn for: {person_name}")
+        
+        try:
+            # Try search first if available
+            if 'search' in self.working_endpoints:
+                return await self._try_search_endpoint(person_name, company_name)
+            elif 'search_profiles' in self.working_endpoints:
+                return await self._try_search_profiles_endpoint(person_name, company_name)
+            else:
+                return self._no_linkedin_response("No search endpoints available")
+                
+        except Exception as e:
+            logger.error(f"❌ LinkedIn search failed: {e}")
+            return self._no_linkedin_response(str(e))
+    
+    async def _try_search_endpoint(self, person_name: str, company_name: str) -> Dict:
+        """Try the main search endpoint"""
+        headers = {
+            'X-RapidAPI-Key': self.rapidapi_key,
+            'X-RapidAPI-Host': 'ultimate-linkedin.p.rapidapi.com',
+            'content-type': 'application/json'
+        }
+        
+        session = await self.get_session()
+        
+        # Try POST with JSON body (common for LinkedIn APIs)
+        payload = {
+            "keywords": f"{person_name} {company_name}",
+            "limit": 5
+        }
+        
+        async with session.post(
+            self.working_endpoints['search'], 
+            json=payload, 
+            headers=headers, 
+            timeout=20
+        ) as response:
+            
+            if response.status == 200:
+                data = await response.json()
+                return self._process_linkedin_results(data, person_name, company_name)
+            else:
+                error_text = await response.text()
+                logger.error(f"❌ LinkedIn search failed: {error_text}")
+                return self._no_linkedin_response(f"Search failed: {response.status}")
+    
+    async def _try_search_profiles_endpoint(self, person_name: str, company_name: str) -> Dict:
+        """Try alternative search profiles endpoint"""
+        headers = {
+            'X-RapidAPI-Key': self.rapidapi_key,
+            'X-RapidAPI-Host': 'ultimate-linkedin.p.rapidapi.com'
+        }
+        
+        session = await self.get_session()
+        params = {
+            'name': person_name,
+            'company': company_name,
+            'limit': 3
+        }
+        
+        async with session.get(
+            self.working_endpoints['search_profiles'],
+            params=params,
+            headers=headers,
+            timeout=20
+        ) as response:
+            
+            if response.status == 200:
+                data = await response.json()
+                return self._process_linkedin_results(data, person_name, company_name)
+            else:
+                return self._no_linkedin_response(f"Search profiles failed: {response.status}")
+    
+    def _process_linkedin_results(self, data: Dict, person_name: str, company_name: str) -> Dict:
+        """Process LinkedIn API response"""
+        profiles = data.get('data', []) or data.get('profiles', []) or data.get('results', [])
+        
+        if not profiles:
+            return self._no_linkedin_response("No profiles found in response")
+        
+        # Find best matching profile
+        best_profile = None
+        best_score = 0
+        
+        for profile in profiles:
+            score = self._calculate_profile_match_score(profile, person_name, company_name)
+            if score > best_score:
+                best_score = score
+                best_profile = profile
+        
+        if best_profile and best_score > 0:
+            return self._build_successful_response(best_profile)
+        else:
+            return self._no_linkedin_response("No matching profiles found")
+    
+    def _calculate_profile_match_score(self, profile: Dict, person_name: str, company_name: str) -> int:
+        """Calculate how well a profile matches the person"""
+        score = 0
+        profile_name = profile.get('name', '').lower()
+        profile_headline = profile.get('headline', '').lower()
+        profile_company = profile.get('company', '').lower()
+        
+        # Name matching (most important)
+        if person_name.lower() in profile_name:
+            score += 100
+        if profile_name == person_name.lower():
+            score += 50
+        
+        # Company matching
+        if company_name.lower() in profile_headline:
+            score += 30
+        if company_name.lower() in profile_company:
+            score += 30
+        
+        # Profile completeness
+        if profile_headline:
+            score += 10
+        if profile_company:
+            score += 10
+        if profile.get('url'):
+            score += 10
+        
+        return score
+    
+    def _build_successful_response(self, profile: Dict) -> Dict:
+        """Build successful LinkedIn response"""
+        return {
+            "linkedin_data_available": True,
+            "profile_found": True,
+            "profile_url": profile.get('url'),
+            "name": profile.get('name'),
+            "headline": profile.get('headline'),
+            "company": profile.get('company'),
+            "location": profile.get('location'),
+            "connections": profile.get('connections'),
+            "summary": (profile.get('summary') or '')[:500],
+            "match_quality": "HIGH" if self._calculate_profile_match_score(profile, profile.get('name', ''), profile.get('company', '')) > 100 else "MEDIUM"
+        }
+    
+    def _no_linkedin_response(self, reason: str) -> Dict:
+        """Standard response when LinkedIn data is not available"""
+        return {
+            "linkedin_data_available": False,
+            "profile_found": False,
+            "error": reason
+        }
+    
+    async def close(self):
+        if self._session:
+            await self._session.close()
+            self._session = None
+
 
 class WebSearchClient:
     """Client for web search operations"""
@@ -236,8 +464,9 @@ class WebSearchClient:
     def __init__(self):
         self.newsapi_key = NEWSAPI_KEY
         self.google_key = GOOGLE_SEARCH_KEY
-        self.google_cx = GOOGLE_CX
+        self.google_engine_id = GOOGLE_SEARCH_Engine_Id
         self._session = None
+        self.linkedin_client = LinkedInClient()
     
     async def get_session(self):
         """Get or create a session"""
@@ -281,7 +510,7 @@ class WebSearchClient:
     
     async def search_person_web(self, person_name: str, company_name: str) -> List[Dict]:
         """Search for general web information about a person"""
-        if not self.google_key or not self.google_cx:
+        if not self.google_key or not self.google_engine_id:
             logger.warning("❌ Google Search API not configured")
             return []
         
@@ -290,7 +519,7 @@ class WebSearchClient:
             params = {
                 'q': f'"{person_name}" "{company_name}"',
                 'key': self.google_key,
-                'cx': self.google_cx,
+                'cx': self.google_engine_id,
                 'num': 3
             }
             
@@ -326,48 +555,127 @@ class WebSearchClient:
     
     async def get_person_web_data(self, person_name: str, company_name: str) -> Dict:
         """Get comprehensive web data for a person"""
-        logger.info(f"🌐 Starting web search for: {person_name}")
+        logger.info(f"🌐 Starting comprehensive search for: {person_name}")
         
         # Run both searches concurrently
-        news_task = asyncio.create_task(self.search_person_news(person_name, company_name))
-        web_task = asyncio.create_task(self.search_person_web(person_name, company_name))
+        # news_task = asyncio.create_task(self.search_person_news(person_name, company_name))
+        # web_task = asyncio.create_task(self.search_person_web(person_name, company_name))
+        # linkedin_task = asyncio.create_task(self.linkedin_client.get_person_linkedin_data(person_name, company_name))
+        # # news_articles, web_results = await asyncio.gather(news_task, web_task,linkedin_task, return_exceptions=True)
         
-        news_articles, web_results = await asyncio.gather(news_task, web_task, return_exceptions=True)
+        # # # Handle exceptions
+        # # if isinstance(news_articles, Exception):
+        # #     logger.error(f"❌ News search exception: {news_articles}")
+        # #     news_articles = []
+        # # if isinstance(web_results, Exception):
+        # #     logger.error(f"❌ Web search exception: {web_results}")
+        # #     web_results = []
+        # results = await asyncio.gather(
+        #     news_task, web_task, linkedin_task, 
+        #     return_exceptions=True  # This prevents one failing from stopping others
+        # )
         
-        # Handle exceptions
-        if isinstance(news_articles, Exception):
-            logger.error(f"❌ News search exception: {news_articles}")
-            news_articles = []
-        if isinstance(web_results, Exception):
-            logger.error(f"❌ Web search exception: {web_results}")
-            web_results = []
+        # # Handle results properly
+        # news_articles = results[0] if not isinstance(results[0], Exception) else []
+        # web_results = results[1] if not isinstance(results[1], Exception) else []
+        # linkedin_data = results[2] if not isinstance(results[2], Exception) else {
+        #     "linkedin_data_available": False,
+        #     "profile_found": False,
+        #     "error": str(results[2]) if results[2] else "Unknown error"
+        # }
         
-        # Analyze the results
+        # # Log any exceptions
+        # for i, result in enumerate(results):
+        #     if isinstance(result, Exception):
+        #         logger.warning(f"⚠️ Search task {i} failed: {result}")
+        
+        # # Analyze the results
+        # credibility_indicators = []
+        
+        # # Check for professional indicators
+        # professional_keywords = ['linkedin', 'founder', 'ceo', 'cto', 'director', 'manager', 'experience', 'previous', 'speaker', 'coach']
+        # news_titles = ' '.join([article.get('title', '') for article in news_articles]).lower()
+        # web_snippets = ' '.join([result.get('snippet', '') for result in web_results]).lower()
+        
+        # all_text = news_titles + ' ' + web_snippets
+        
+        # for keyword in professional_keywords:
+        #     if keyword in all_text:
+        #         credibility_indicators.append(keyword)
+        
+        # web_data = {
+        #     'news_mentions': len(news_articles),
+        #     'web_references': len(web_results),
+        #     'credibility_indicators': credibility_indicators,
+        #     'has_public_presence': len(news_articles) > 0 or len(web_results) > 0,
+        #     'professional_score': min(len(credibility_indicators) * 20, 100),  # 0-100 scale
+        #     'sample_news': [article.get('title', '') for article in news_articles[:2]] if news_articles else [],
+        #     'sample_web': [result.get('title', '') for result in web_results[:2]] if web_results else []
+        # }
+        
+        # logger.info(f"📊 Web data for {person_name}: {web_data['news_mentions']} news, {web_data['web_references']} web results")
+        # return web_data
+        tasks = [
+            asyncio.create_task(self.search_person_news(person_name, company_name)),
+            asyncio.create_task(self.search_person_web(person_name, company_name)),
+            asyncio.create_task(self.linkedin_client.get_person_linkedin_data(person_name, company_name))
+        ]
+        
+        # Wait for all with proper exception handling
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Process results safely
+        news_articles = self._safe_extract(results[0], [])
+        web_results = self._safe_extract(results[1], [])
+        linkedin_data = self._safe_extract(results[2], self.linkedin_client._no_linkedin_response("Unknown error"))
+        
+        # Analyze combined data
+        return self._analyze_combined_data(person_name, news_articles, web_results, linkedin_data)
+    
+    def _safe_extract(self, result, default):
+        """Safely extract result from potentially failed task"""
+        if isinstance(result, Exception):
+            logger.warning(f"⚠️ Search task failed: {result}")
+            return default
+        return result
+    
+    def _analyze_combined_data(self, person_name: str, news_articles: List, web_results: List, linkedin_data: Dict) -> Dict:
+        """Analyze combined web, news, and LinkedIn data"""
+        # Your existing analysis logic here
         credibility_indicators = []
         
-        # Check for professional indicators
-        professional_keywords = ['linkedin', 'founder', 'ceo', 'cto', 'director', 'manager', 'experience', 'previous', 'speaker', 'coach']
+        # Analyze web and news data
         news_titles = ' '.join([article.get('title', '') for article in news_articles]).lower()
         web_snippets = ' '.join([result.get('snippet', '') for result in web_results]).lower()
-        
         all_text = news_titles + ' ' + web_snippets
         
+        professional_keywords = ['founder', 'ceo', 'cto', 'director', 'manager', 'experience', 'speaker', 'coach']
         for keyword in professional_keywords:
             if keyword in all_text:
-                credibility_indicators.append(keyword)
+                credibility_indicators.append(keyword.upper())
         
-        web_data = {
+        # Add LinkedIn indicators if available
+        if linkedin_data.get('profile_found'):
+            credibility_indicators.append('LINKEDIN_PROFILE')
+            if linkedin_data.get('match_quality') == 'HIGH':
+                credibility_indicators.append('HIGH_QUALITY_MATCH')
+        
+        # Calculate professional score
+        base_score = min(len(credibility_indicators) * 15, 60)
+        linkedin_bonus = 40 if linkedin_data.get('profile_found') else 0
+        professional_score = min(base_score + linkedin_bonus, 100)
+        
+        return {
             'news_mentions': len(news_articles),
             'web_references': len(web_results),
+            'linkedin_data': linkedin_data,
             'credibility_indicators': credibility_indicators,
-            'has_public_presence': len(news_articles) > 0 or len(web_results) > 0,
-            'professional_score': min(len(credibility_indicators) * 20, 100),  # 0-100 scale
-            'sample_news': [article.get('title', '') for article in news_articles[:2]] if news_articles else [],
-            'sample_web': [result.get('title', '') for result in web_results[:2]] if web_results else []
+            'has_public_presence': len(news_articles) > 0 or len(web_results) > 0 or linkedin_data.get('profile_found', False),
+            'has_linkedin_profile': linkedin_data.get('profile_found', False),
+            'professional_score': professional_score,
+            'sample_news': [article.get('title', '') for article in news_articles[:2]],
+            'sample_web': [result.get('title', '') for result in web_results[:2]]
         }
-        
-        logger.info(f"📊 Web data for {person_name}: {web_data['news_mentions']} news, {web_data['web_references']} web results")
-        return web_data
     
     async def close(self):
         """Close the HTTP session"""
@@ -384,8 +692,11 @@ async def evaluate_team_tool(company_name: str, team_members_json: str) -> str:
     Enhanced tool with web search capabilities
     """
     try:
-        logger.info(f"Evaluating team for {company_name} with web search")
         
+        # company_name = structured_data.get("startup_name")
+        # team_members_json = structured_data.get("team")
+
+        logger.info(f"Evaluating team for {company_name} with web search")
         # Parse the JSON string
         team_members = json.loads(team_members_json)
         
