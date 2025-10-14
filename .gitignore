@@ -1,11 +1,11 @@
 Hackthon/Backend/ai-analyst-poc-4c4651a0ea55.json
 Hackthon/Backend/*.json
 
-# myenv/
+myenv/
 
-# node_modules/
+node_modules/
 
-# .env
+.env
 
 
 # Ignore Python cache and virtual environments
