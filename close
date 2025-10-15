@@ -1,0 +1,159 @@
+[33mcommit c929020d191897219bb12bc950c57e2697d32c28[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m)[m
+Author: roop kumar939 <totest.me123@gmail.com>
+Date:   Wed Oct 15 05:07:42 2025 +0000
+
+    oct15-1st
+
+[1mdiff --git a/Hackthon/Backend/tools/team_analysis_tool.py b/Hackthon/Backend/tools/team_analysis_tool.py[m
+[1mindex efe38765..3527dff1 100644[m
+[1m--- a/Hackthon/Backend/tools/team_analysis_tool.py[m
+[1m+++ b/Hackthon/Backend/tools/team_analysis_tool.py[m
+[36m@@ -229,233 +229,233 @@[m [mlogger = logging.getLogger("team_risk_tool")[m
+ NEWSAPI_KEY = os.getenv('NEWSAPI_KEY')[m
+ GOOGLE_SEARCH_KEY = os.getenv('GOOGLE_SEARCH_KEY')[m
+ GOOGLE_SEARCH_Engine_Id = os.getenv('GOOGLE_SEARCH_Engine_Id')[m
+[31m-RAPIDAPI_KEY = os.getenv('RAPIDAPI_KEY')[m
+[31m-[m
+[31m-class LinkedInClient:[m
+[31m-    """Corrected client for LinkedIn API operations via RapidAPI"""[m
+[31m-    [m
+[31m-    def __init__(self):[m
+[31m-        self.rapidapi_key = RAPIDAPI_KEY[m
+[31m-        self._session = None[m
+[31m-        self.base_url = "https://ultimate-linkedin.p.rapidapi.com"[m
+[31m-        self.endpoints_checked = False[m
+[31m-        self.working_endpoints = {}[m
+[31m-    [m
+[31m-    async def get_session(self):[m
+[31m-        if self._session is None:[m
+[31m-            self._session = aiohttp.ClientSession()[m
+[31m-        return self._session[m
+[31m-    [m
+[31m-    async def validate_endpoints(self):[m
+[31m-        """Check which LinkedIn API endpoints actually work"""[m
+[31m-        if self.endpoints_checked:[m
+[31m-            return self.working_endpoints[m
+[32m+[m[32m# RAPIDAPI_KEY = os.getenv('RAPIDAPI_KEY')[m
+[32m+[m
+[32m+[m[32m# class LinkedInClient:[m
+[32m+[m[32m#     """Corrected client for LinkedIn API operations via RapidAPI"""[m
+[32m+[m[41m    [m
+[32m+[m[32m#     def __init__(self):[m
+[32m+[m[32m#         self.rapidapi_key = RAPIDAPI_KEY[m
+[32m+[m[32m#         self._session = None[m
+[32m+[m[32m#         self.base_url = "https://ultimate-linkedin.p.rapidapi.com"[m
+[32m+[m[32m#         self.endpoints_checked = False[m
+[32m+[m[32m#         self.working_endpoints = {}[m
+[32m+[m[41m    [m
+[32m+[m[32m#     async def get_session(self):[m
+[32m+[m[32m#         if self._session is None:[m
+[32m+[m[32m#             self._session = aiohttp.ClientSession()[m
+[32m+[m[32m#         return self._session[m
+[32m+[m[41m    [m
+[32m+[m[32m#     async def validate_endpoints(self):[m
+[32m+[m[32m#         """Check which LinkedIn API endpoints actually work"""[m
+[32m+[m[32m#         if self.endpoints_checked:[m
+[32m+[m[32m#             return self.working_endpoints[m
+             [m
+[31m-        if not self.rapidapi_key:[m
+[31m-            self.endpoints_checked = True[m
+[31m-            return {}[m
+[31m-        [m
+[31m-        headers = {[m
+[31m-            'X-RapidAPI-Key': self.rapidapi_key,[m
+[31m-            'X-RapidAPI-Host': 'ultimate-linkedin.p.rapidapi.com'[m
+[31m-        }[m
+[31m-        [m
+[31m-        endpoints_to_test = {[m
+[31m-            'search': f"{self.base_url}/search",[m
+[31m-            'search_profiles': f"{self.base_url}/search-profiles", [m
+[31m-            'profile_search': f"{self.base_url}/profile-search",[m
+[31m-            'profile': f"{self.base_url}/profile"[m
+[31m-        }[m
+[31m-        [m
+[31m-        session = await self.get_session()[m
+[31m-        working = {}[m
+[31m-        [m
+[31m-        for name, url in endpoints_to_test.items():[m
+[31m-            try:[m
+[31m-                # Test with a simple request[m
+[31m-                async with session.get(url, headers=headers, timeout=10) as response:[m
+[31m-                    if response.status in [200, 400, 422]:  # 400/422 might mean endpoint exists but needs params[m
+[31m-                        working[name] = url[m
+[31m-                        logger.info(f"✅ LinkedIn endpoint {name} is available")[m
+[31m-                    else:[m
+[31m-                        logger.warning(f"⚠️ LinkedIn endpoint {name} returned {response.status}")[m
+[31m-            except Exception as e:[m
+[31m-                logger.warning(f"⚠️ LinkedIn endpoint {name} failed: {e}")[m
+[31m-        [m
+[31m-        self.working_endpoints = working[m
+[31m-        self.endpoints_checked = True[m
+[31m-        [m
+[31m-        if not working:[m
+[31m-            logger.error("❌ No working LinkedIn endpoints found")[m
+[31m-        [m
+[31m-        return working[m
+[31m-    [m
+[31m-    async def get_person_linkedin_data(self, person_name: str, company_name: str) -> Dict:[m
+[31m-        """[m
+[31m-        Get comprehensive LinkedIn data for a person[m
+[31m-        """[m
+[31m-        if not self.rapidapi_key:[m
+[31m-            return self._no_linkedin_response("RAPIDAPI_KEY not configured")[m
+[31m-        [m
+[31m-        # Validate endpoints on first use[m
+[31m-        if not self.endpoints_checked:[m
+[31m-            await self.validate_endpoints()[m
+[31m-        [m
+[31m-        # If no working endpoints, skip LinkedIn[m
+[31m-        if not self.working_endpoints:[m
+[31m-            return self._no_linkedin_response("No working LinkedIn API endpoints available")[m
+[31m-        [m
+[31m-        logger.info(f"🔍 Searching LinkedIn for: {person_name}")[m
+[31m-        [m
+[31m-        try:[m
+[31m-            # Try search first if available[m
+[31m-            if 'search' in self.working_endpoints:[m
+[31m-                return await self._try_search_endpoint(person_name, company_name)[m
+[31m-            elif 'search_profiles' in self.working_endpoints:[m
+[31m-                return await self._try_search_profiles_endpoint(person_name, company_name)[m
+[31m-            else:[m
+[31m-                return self._no_linkedin_response("No search endpoints available")[m
+[32m+[m[32m#         if not self.rapidapi_key:[m
+[32m+[m[32m#             self.endpoints_checked = True[m
+[32m+[m[32m#             return {}[m
+[32m+[m[41m        [m
+[32m+[m[32m#         headers = {[m
+[32m+[m[32m#             'X-RapidAPI-Key': self.rapidapi_key,[m
+[32m+[m[32m#             'X-RapidAPI-Host': 'ultimate-linkedin.p.rapidapi.com'[m
+[32m+[m[32m#         }[m
+[32m+[m[41m        [m
+[32m+[m[32m#         endpoints_to_test = {[m
+[32m+[m[32m#             'search': f"{self.base_url}/search",[m
+[32m+[m[32m#             'search_profiles': f"{self.base_url}/search-profiles",[m[41m [m
+[32m+[m[32m#             'profile_search': f"{self.base_url}/profile-search",[m
+[32m+[m[32m#             'profile': f"{self.base_url}/profile"[m
+[32m+[m[32m#         }[m
+[32m+[m[41m        [m
+[32m+[m[32m#         session = await self.get_session()[m
+[32m+[m[32m#         working = {}[m
+[32m+[m[41m        [m
+[32m+[m[32m#         for name, url in endpoints_to_test.items():[m
+[32m+[m[32m#             try:[m
+[32m+[m[32m#                 # Test with a simple request[m
+[32m+[m[32m#                 async with session.get(url, headers=headers, timeout=10) as response:[m
+[32m+[m[32m#                     if response.status in [200, 400, 422]:  # 400/422 might mean endpoint exists but needs params[m
+[32m+[m[32m#                         working[name] = url[m
+[32m+[m[32m#                         logger.info(f"✅ LinkedIn endpoint {name} is available")[m
+[32m+[m[32m#                     else:[m
+[32m+[m[32m#                         logger.warning(f"⚠️ LinkedIn endpoint {name} returned {response.status}")[m
+[32m+[m[32m#             except Exception as e:[m
+[32m+[m[32m#                 logger.warning(f"⚠️ LinkedIn endpoint {name} failed: {e}")[m
+[32m+[m[41m        [m
+[32m+[m[32m#         self.working_endpoints = working[m
+[32m+[m[32m#         self.endpoints_checked = True[m
+[32m+[m[41m        [m
+[32m+[m[32m#         if not working:[m
+[32m+[m[32m#             logger.error("❌ No working LinkedIn endpoints found")[m
+[32m+[m[41m        [m
+[32m+[m[32m#         re
